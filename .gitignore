@@ -3,6 +3,9 @@
 *.pb
 *.ckpt.data-00000-of-00001
 *.ckpt.index
+*.zip
 
 #
 .ipynb_checkpoints
+samples/*
+exif-js-2.3.0/*

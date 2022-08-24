@@ -4,10 +4,140 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Data extract from videos</title>
-    
+    <!-- tensorflow -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js"></script>
+    <script type="text/javascript">
+      let tfmodel;
+    </script>
   </head>
   <body>
+    <div id="image-section" style="width:100%; display:flex; flex-direction:row; gap:1em;">
+      <!-- <img id="input" crossorigin='anonymous' src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg" width="513px" height="513px"> -->
+      <img id="input" crossorigin="anonymous" src="" width="513px" height="513px">
+      <canvas id="output" width="513px" height="513px"></canvas>
+    </div>
 
+    <div id="operation-section" style="width:100%; display:flex; flex-direction:row; gap:2em; margin-top:2em;">
+      <input type="file" id="input-file" multiple>
+      <input type="button" id="get-obj" value="process images">
+    </div>
+
+    <!-- reading exif inf. from files (GPS coordinate) -->
+    <script type="text/javascript" src="../lib/exif-js/exif.js"></script>
+    <script type="text/javascript">
+      let files_to_process=[];
+      let file_metas={};
+      const INPUT_IMG = document.getElementById("input");
+      const COUTPUT_CANVAS = document.getElementById('output');
+
+      const INDEXED_COLORS={
+        0:[0,0,0,255],
+        1:[255,0,0,255],
+        2:[255,255,0,255],
+        3:[255,255,255,255],
+        4:[0,255,0,255],
+        5:[0,255,255,255],
+        6:[0,0,255,255],
+        7:[255,0,255,255],
+      }
+
+      function render_raster(ctx, rst, h=513, w=513, cmap=(x)=>{return INDEXED_COLORS[x%8];}){
+        // render raster data to RGB
+        let imgData = ctx.getImageData(0, 0, w, h);
+        for (let i=0; i<h; i++){ // y
+          for (let j=0; j<w; j++){ // x
+            const index_rst = (i*w + j);
+            const index_px = index_rst * 4;
+            const px = cmap(rst[index_rst]);
+            imgData.data[index_px]=px[0];
+            imgData.data[index_px+1]=px[1];
+            imgData.data[index_px+2]=px[2];
+            imgData.data[index_px+3]=px[3];
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+      }
+
+      function to_decimal(n){
+        return n;
+      }
+
+      function cbk_get_GPS(f, cbk_next=null){
+        // returns a callabel which extract gps data from f, and invoke cbk_next if non-null is given
+        // note that EXIF works as callback functions
+        return function(){
+          EXIF.getData(f, function(){
+            // console.log(EXIF.pretty(this));
+            const lat = EXIF.getTag(this, "GPSLatitude") || null;
+            const lon = EXIF.getTag(this, "GPSLongitude") || null;
+            const bearing = EXIF.getTag(this, "GPSImgDirection") || EXIF.getTag(this, "GPSDestBearing") || null;
+            const timestamp=EXIF.getTag(this, "GPSTimeStamp") || null;
+            console.log(f.name, to_decimal(lat), to_decimal(lon), bearing, timestamp); // for debug, show the data
+            file_metas[f.name] = {'lat': to_decimal(lat), 'lon': to_decimal(lon), 'heading': bearing, 'time': timestamp};
+            if (cbk_next!=null){
+              cbk_next();
+            }
+          });
+        };
+      }
+
+      function cbk_load_img(f, cbk_next=null){
+        // returns a callabel which reads image data from f, and invoke cbk_next if non-null is given
+        return function(){
+          console.log('loading',f.name);
+          INPUT_IMG.src = URL.createObjectURL(f);
+          INPUT_IMG.onload = function(){
+            URL.revokeObjectURL(this.src);
+            if (cbk_next!=null){
+              cbk_next();
+            }
+          };
+        };
+      }
+
+      function cbk_run_prediction(cbk_next=null){
+        // returns a callabel which process the current data of <img>, and invoke cbk_next if non-null is given
+        return function(){
+          console.log('run prediction');
+          const img = INPUT_IMG;
+          const x = tf.tidy(()=>{
+            return tf.browser.fromPixels(img).cast('int32').expandDims(0);
+          });
+
+          const y = tf.tidy(()=>{
+            return tfmodel.execute(x).squeeze().argMax(2);
+          });
+          render_raster(COUTPUT_CANVAS.getContext('2d'), y.dataSync());
+
+          if (cbk_next!=null){
+            cbk_next();
+          }
+        };
+      }
+
+      // update file objects
+      // file API, which reads images (and more) from local drive
+      // see https://developer.mozilla.org/en-US/docs/Web/API/File_API/Using_files_from_web_applications
+      document.getElementById("input-file").addEventListener("change", function(){files_to_process=this.files;console.log('file to process',this.files);}, false);
+      document.getElementById('get-obj').onclick=function(){
+        // build a chain of callback functions such that the files will be processed one after the other
+        let cbk_chain=null;
+        if (files_to_process.length){
+          // generate the callback chain from the selected files
+          for (let file of files_to_process){ // for each of the returned files
+            cbk_chain = cbk_get_GPS(file, cbk_chain);
+            cbk_chain = cbk_run_prediction(cbk_chain);
+            cbk_chain = cbk_load_img(file, cbk_chain);
+          }
+        }
+        cbk_chain(); //invoke the chain
+      };
+    </script>
+
+    <script type="module">
+      tf.loadGraphModel("../python/deeplabv3_mnv2_dm05_pascal_trainval/web/model.json").then((x)=>{
+        tfmodel=x;
+      });
+    </script>
   </body>
 </html>
