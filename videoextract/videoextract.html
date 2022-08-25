@@ -9,17 +9,63 @@
     <script type="text/javascript">
       let tfmodel;
     </script>
+    <style media="screen">
+      *{
+        font-family: sans-serif;
+      }
+      .header{
+        font-size:32px;
+        margin:1em;
+      }
+      .clicks{
+        font-size:18px;
+        min-width:10em;
+      }
+      .op_container{
+        width:100%;
+        display:flex;
+        flex-direction:row;
+        gap:2em;
+        margin-top:2em;
+        flex-wrap: wrap;
+        justify-content: space-between;
+      }
+      .img_container{
+        width:100%; display:flex; flex-direction:row; gap:1em;
+      }
+      .img_wrapper{
+        position:relative; width:100%;
+      }
+      .display-section{
+        position:relative;
+        text-align:center;
+        margin-left: auto;
+        margin-right: auto;
+        max-width: 720px;
+      }
+    </style>
   </head>
   <body>
-    <div id="image-section" style="width:100%; display:flex; flex-direction:row; gap:1em;">
-      <!-- <img id="input" crossorigin='anonymous' src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg" width="513px" height="513px"> -->
-      <img id="input" crossorigin="anonymous" src="" width="513px" height="513px">
-      <canvas id="output" width="513px" height="513px"></canvas>
-    </div>
-
-    <div id="operation-section" style="width:100%; display:flex; flex-direction:row; gap:2em; margin-top:2em;">
-      <input type="file" id="input-file" multiple>
-      <input type="button" id="get-obj" value="process images">
+    <div class="display-section">
+      <div class="header">Extracting image data using AI</div>
+      <!-- the real image data, for fixed input size -->
+      <img id="input" crossorigin="anonymous" src="" width="513px" height="513px" hidden="hidden">
+      <div id="image-section" class="img_container">
+        <!-- the preview image data -->
+        <div class="img_wrapper">
+        <img id="input-preview" crossorigin="anonymous" src="https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg" style="max-width:100%; aspect-ratio:1">
+        </div>
+        <div class="img_wrapper">
+        <canvas id="output" width="513px" height="513px" style="max-width:100%; border: solid 1px black;"></canvas>
+        </div>
+      </div>
+      <textarea id="output-info" readonly="readonly" style="width:99%; padding:0.5%; height:20vh" ></textarea>
+      <input type="file" accept="image/jpeg" id="input-file" multiple="multiple" hidden="hidden"></input>
+      <div id="operation-section" class="op_container">
+        <input type="button" id="get-files" value="open" class="clicks"></input>
+        <input type="button" id="get-obj" value="process" class="clicks"></input>
+        <input type="button" id="export-data" value="save" class="clicks"></input>
+      </div>
     </div>
 
     <!-- reading exif inf. from files (GPS coordinate) -->
@@ -27,8 +73,13 @@
     <script type="text/javascript">
       let files_to_process=[];
       let file_metas={};
+
+      function clear_all(){files_to_process=[];file_metas={};}
+
       const INPUT_IMG = document.getElementById("input");
+      const INPUT_IMG_PREV = document.getElementById("input-preview");
       const COUTPUT_CANVAS = document.getElementById('output');
+      const OUTPUT_INFO = document.getElementById('output-info');
 
       const INDEXED_COLORS={
         0:[0,0,0,255],
@@ -39,7 +90,7 @@
         5:[0,255,255,255],
         6:[0,0,255,255],
         7:[255,0,255,255],
-      }
+      };
 
       function render_raster(ctx, rst, h=513, w=513, cmap=(x)=>{return INDEXED_COLORS[x%8];}){
         // render raster data to RGB
@@ -72,7 +123,6 @@
             const lon = EXIF.getTag(this, "GPSLongitude") || null;
             const bearing = EXIF.getTag(this, "GPSImgDirection") || EXIF.getTag(this, "GPSDestBearing") || null;
             const timestamp=EXIF.getTag(this, "GPSTimeStamp") || null;
-            console.log(f.name, to_decimal(lat), to_decimal(lon), bearing, timestamp); // for debug, show the data
             file_metas[f.name] = {'lat': to_decimal(lat), 'lon': to_decimal(lon), 'heading': bearing, 'time': timestamp};
             if (cbk_next!=null){
               cbk_next();
@@ -84,8 +134,12 @@
       function cbk_load_img(f, cbk_next=null){
         // returns a callabel which reads image data from f, and invoke cbk_next if non-null is given
         return function(){
-          console.log('loading',f.name);
-          INPUT_IMG.src = URL.createObjectURL(f);
+          OUTPUT_INFO.value+=('\nprocessing '+f.name + ' ...');
+          OUTPUT_INFO.scrollTop = OUTPUT_INFO.scrollHeight;
+          const url= URL.createObjectURL(f);
+          INPUT_IMG.src = url;
+          INPUT_IMG_PREV.src=url;
+
           INPUT_IMG.onload = function(){
             URL.revokeObjectURL(this.src);
             if (cbk_next!=null){
@@ -98,7 +152,6 @@
       function cbk_run_prediction(cbk_next=null){
         // returns a callabel which process the current data of <img>, and invoke cbk_next if non-null is given
         return function(){
-          console.log('run prediction');
           const img = INPUT_IMG;
           const x = tf.tidy(()=>{
             return tf.browser.fromPixels(img).cast('int32').expandDims(0);
@@ -115,28 +168,46 @@
         };
       }
 
-      // update file objects
-      // file API, which reads images (and more) from local drive
-      // see https://developer.mozilla.org/en-US/docs/Web/API/File_API/Using_files_from_web_applications
-      document.getElementById("input-file").addEventListener("change", function(){files_to_process=this.files;console.log('file to process',this.files);}, false);
-      document.getElementById('get-obj').onclick=function(){
-        // build a chain of callback functions such that the files will be processed one after the other
-        let cbk_chain=null;
-        if (files_to_process.length){
-          // generate the callback chain from the selected files
-          for (let file of files_to_process){ // for each of the returned files
-            cbk_chain = cbk_get_GPS(file, cbk_chain);
-            cbk_chain = cbk_run_prediction(cbk_chain);
-            cbk_chain = cbk_load_img(file, cbk_chain);
+      function reg_ops(){
+        // file API, which reads images (and more) from local drive
+        // see https://developer.mozilla.org/en-US/docs/Web/API/File_API/Using_files_from_web_applications
+        document.getElementById("get-files").addEventListener("click", function(){document.getElementById("input-file").click();}, false);
+
+        document.getElementById("input-file").addEventListener("change", function(){
+          clear_all();
+          files_to_process=this.files;
+          OUTPUT_INFO.value="==== " + this.files.length + " image(s) to process ====";
+        }, false);
+
+        document.getElementById('get-obj').onclick=function(){
+          // build a chain of callback functions such that the files will be processed one after the other
+          let cbk_chain=function(){
+            OUTPUT_INFO.value+=('\n==== finished ====');
+            OUTPUT_INFO.scrollTop = OUTPUT_INFO.scrollHeight;
+          };
+
+          if (files_to_process.length){
+            // generate the callback chain from the selected files
+            for (let file of files_to_process){ // for each of the returned files
+              cbk_chain = cbk_get_GPS(file, cbk_chain);
+              cbk_chain = cbk_run_prediction(cbk_chain);
+              cbk_chain = cbk_load_img(file, cbk_chain);
+            }
+            cbk_chain();
+          } else {
+            // alert("please select image files from your local drive first");
+            OUTPUT_INFO.value=('open first');
           }
-        }
-        cbk_chain(); //invoke the chain
-      };
+        };
+      }
     </script>
 
     <script type="module">
+      OUTPUT_INFO.value=('loading...');
       tf.loadGraphModel("../python/deeplabv3_mnv2_dm05_pascal_trainval/web/model.json").then((x)=>{
         tfmodel=x;
+        reg_ops();
+        OUTPUT_INFO.value=('ready');
       });
     </script>
   </body>
