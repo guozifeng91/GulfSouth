@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Data extract from videos</title>
+    <title>Image Object Detection</title>
     <!-- tensorflow -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js"></script>
     <script type="text/javascript">
@@ -43,11 +43,15 @@
         margin-right: auto;
         max-width: 720px;
       }
+
+      textarea {
+        resize: none;
+      }
     </style>
   </head>
   <body>
     <div class="display-section">
-      <div class="header">Extracting image data using AI</div>
+      <div class="header">Object Detection using AI</div>
       <!-- the real image data, for fixed input size -->
       <img id="input" crossorigin="anonymous" src="https://upload.wikimedia.org/wikipedia/commons/e/e2/Namibian_Bushmen_Girls.JPG" width="513px" height="513px" hidden="hidden">
       <!-- <img id="input" crossorigin="anonymous" src="https://upload.wikimedia.org/wikipedia/commons/e/e2/Namibian_Bushmen_Girls.JPG" hidden="hidden"> -->
@@ -67,7 +71,7 @@
         <input type="button" id="get-files" value="open" class="clicks"></input>
         <input type="button" id="get-obj" value="process" class="clicks"></input>
         <input type="button" id="export-data" value="save" class="clicks"></input>
-        <input type="button" id="op-test" value="test" class="clicks"></input>
+        <!-- <input type="button" id="op-test" value="test" class="clicks"></input> -->
       </div>
     </div>
 
@@ -136,12 +140,53 @@
         ctx.font = "18px sans-serif";
         for (let l of info){
           const bbox=l['bbox'];
-          ctx.fillText(l['class_name'], bbox[1]*w, bbox[0]*h+18);
+          ctx.fillText(l['alt_class_names'].join(', '), bbox[1]*w, bbox[0]*h+18);
         }
       }
 
-      function to_decimal(n){
-        return n;
+      function iou(bbox1,bbox2){
+        function area(a,b,c,d){
+          return (c-a)*(d-b);
+        }
+        const [a1,b1,c1,d1]=bbox1;
+        const [a2,b2,c2,d2]=bbox2;
+
+        const xmin=Math.max(a1,a2);
+        const ymin=Math.max(b1,b2);
+
+        const xmax=Math.min(c1,c2);
+        const ymax=Math.min(d1,d2);
+
+        if (xmin>=xmax || ymin>=ymax){
+          return 0;
+        } else {
+          const i = area(xmin,ymin,xmax,ymax);
+          return i / (area(a1,b1,c1,d1) + area(a2,b2,c2,d2) - i);
+        }
+      }
+
+      function to_decimal(ref, num){
+        let sign=1;
+        if (ref!=null){
+          // direction info is given
+          if (ref=='S' || ref=='s' || ref=='W' || ref=='w'){
+            sign=-1;
+          }
+        }
+
+        if (num!=null){
+          // has numerical data
+          if (num.length==3){
+            // degree, minute, second
+            return sign * (num[0]+num[1]/60+num[2]/3600);
+          } else {
+            // degree in floating num
+            return sign * num;
+          }
+        } else {
+          // no numerical data
+          return null;
+        }
       }
 
       function cbk_get_GPS(f, cbk_next=null){
@@ -150,11 +195,14 @@
         return function(){
           EXIF.getData(f, function(){
             // console.log(EXIF.pretty(this));
+            const latRef = EXIF.getTag(this, "GPSLatitudeRef") || null;
             const lat = EXIF.getTag(this, "GPSLatitude") || null;
+            const lonRef = EXIF.getTag(this, "GPSLongitudeRef") || null;
             const lon = EXIF.getTag(this, "GPSLongitude") || null;
             const bearing = EXIF.getTag(this, "GPSImgDirection") || EXIF.getTag(this, "GPSDestBearing") || null;
-            const timestamp=EXIF.getTag(this, "GPSTimeStamp") || null;
-            file_metas[f.name] = {'lat': to_decimal(lat), 'lon': to_decimal(lon), 'heading': bearing, 'time': timestamp};
+            const timestamp=EXIF.getTag(this, "DateTimeOriginal") || EXIF.getTag(this, "DateTimeDigitized") || null;
+            file_metas[f.name] = {'lat': to_decimal(latRef, lat), 'lon': to_decimal(lonRef, lon), 'heading': bearing, 'time': timestamp};
+            OUTPUT_INFO.value+=(' | GPS('+ to_decimal(latRef, lat) + ', ' + to_decimal(lonRef, lon) + ') | time ' + timestamp);
             if (cbk_next!=null){
               cbk_next();
             }
@@ -165,7 +213,8 @@
       function cbk_load_img(f, cbk_next=null){
         // returns a callabel which reads image data from f, and invoke cbk_next if non-null is given
         return function(){
-          OUTPUT_INFO.value+=('\nprocessing '+f.name + ' ...');
+          // OUTPUT_INFO.value+=('\nprocessing '+f.name + ' ...');
+          OUTPUT_INFO.value+=('\n'+f.name);
           OUTPUT_INFO.scrollTop = OUTPUT_INFO.scrollHeight;
           const url= URL.createObjectURL(f);
           INPUT_IMG.src = url;
@@ -230,15 +279,39 @@
             let scores = y[1].dataSync();
             let type = y[2].dataSync();
 
-            let localizations=[];
+            let locs=[];
 
             for (let i=0;i<scores.length;i++){
               if (scores[i]>score_thres){
-                localizations.push({'class_name':classes[type[i]-1], 'score':scores[i], 'bbox':bbox.slice(i*4,(i+1)*4)});
+                locs.push({'class_name':classes[type[i]-1],'alt_class_names':[classes[type[i]-1]], 'score':scores[i], 'bbox':bbox.slice(i*4,(i+1)*4)});
               }
             }
 
+            let chk=new Array(locs.length).fill(true);
+            // remove overlapped bboxes
+            for (let i=0;i<locs.length;i++){
+              for (let j=i+1;j<locs.length;j++){
+                if (iou(locs[i]['bbox'], locs[j]['bbox'])>=0.5) {
+                  if (locs[i]['score'] >= locs[j]['score']) {
+                    chk[j]=false;
+                    locs[i]['alt_class_names'] = locs[i]['alt_class_names'].concat(locs[j]['alt_class_names']); // merge their alt names (i.e., other possible class names)
+                  } else {
+                    chk[i]=false;
+                    locs[j]['alt_class_names'] = locs[j]['alt_class_names'].concat(locs[i]['alt_class_names']); // merge their alt names (i.e., other possible class names)
+                  }
+                }
+              }
+            }
+
+            let localizations=[];
+            for (let i=0;i<locs.length;i++){
+              if (chk[i]){
+                locs[i]['alt_class_names'] = [...new Set(locs[i]['alt_class_names'])]; // remove duplicates
+                localizations.push(locs[i]);
+              }
+            }
             // render the data
+            OUTPUT_INFO.value+=(' | ' + localizations.length + ' object(s)');
             file_extractions[f.name]=localizations;
             INPUT_IMG_PREV.getContext('2d').drawImage(INPUT_IMG, 0, 0, INPUT_IMG_PREV.width, INPUT_IMG_PREV.height);
             render_localization(COUTPUT_CANVAS.getContext('2d'), localizations);
@@ -283,7 +356,7 @@
                 cbk_chain = cbk_run_prediction_segmentation(file, tfmodel, cbk_chain);
               } else {
                 // fire the localization model (require localization model)
-                cbk_chain = cbk_run_prediction_localization(file, tfmodel, 0.2, cbk_chain);
+                cbk_chain = cbk_run_prediction_localization(file, tfmodel, 0.18, cbk_chain);
               }
 
               cbk_chain = cbk_load_img(file, cbk_chain);
