@@ -204,7 +204,7 @@
 
     <script type="module">
       OUTPUT_INFO.value=('loading...');
-      tf.loadGraphModel("../python/deeplabv3_mnv2_dm05_pascal_trainval/web/model.json").then((x)=>{
+      tf.loadGraphModel("../models/deeplabv3_mnv2_dm05_pascal_trainval/web/model.json").then((x)=>{
         tfmodel=x;
         reg_ops();
         OUTPUT_INFO.value=('ready');
