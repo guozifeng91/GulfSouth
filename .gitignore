@@ -7,5 +7,12 @@
 
 #
 .ipynb_checkpoints
+saved_model
+frozen_model
+
 samples/*
 exif-js-2.3.0/*
+
+# objects that are excluded due to large size
+models/ssd_mobilenet_v1_coco2017/*
+models/ssd_mobilenet_v2_openimages_v4/*

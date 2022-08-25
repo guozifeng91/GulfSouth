@@ -1,0 +1,3 @@
+model avaiable from [https://tfhub.dev/sayakpaul/lite-model/mobilenetv2-dm05-coco/dr/1](https://tfhub.dev/sayakpaul/lite-model/mobilenetv2-dm05-coco/dr/1)
+<br>
+and as forzon model from [https://colab.research.google.com/github/sayakpaul/Adventures-in-TensorFlow-Lite/blob/master/DeepLabV3/DeepLab_TFLite_COCO.ipynb](https://colab.research.google.com/github/sayakpaul/Adventures-in-TensorFlow-Lite/blob/master/DeepLabV3/DeepLab_TFLite_COCO.ipynb)

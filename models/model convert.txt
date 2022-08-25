@@ -1,0 +1,4 @@
+tensorflowjs_converter --input_format=tf_hub https://tfhub.dev/tensorflow/ssd_mobilenet_v1/fpn_640x640/1 ssd_mobilenet_v1_coco2017/web_model
+
+
+tensorflowjs_converter --input_format=tf_saved_model ssd_mobilenet_v1_coco2017/saved_model/saved_model.pb ssd_mobilenet_v1_coco2017/web_model
