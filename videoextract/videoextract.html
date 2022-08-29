@@ -22,11 +22,13 @@
         min-width:10em;
       }
       .op_container{
+        gap:1em;
+        margin-top:2em;
+      }
+      .row_container{
         width:100%;
         display:flex;
         flex-direction:row;
-        gap:2em;
-        margin-top:2em;
         flex-wrap: wrap;
         justify-content: space-between;
       }
@@ -67,11 +69,16 @@
       </div>
       <textarea id="output-info" readonly="readonly" style="width:99%; padding:0.5%; height:20vh" ></textarea>
       <input type="file" accept="image/jpeg" id="input-file" multiple="multiple" hidden="hidden"></input>
-      <div id="operation-section" class="op_container">
-        <input type="button" id="get-files" value="open" class="clicks"></input>
-        <input type="button" id="get-obj" value="process" class="clicks"></input>
-        <input type="button" id="export-data" value="save" class="clicks"></input>
-        <!-- <input type="button" id="op-test" value="test" class="clicks"></input> -->
+      <div id="operation-section" class="op_container row_container">
+        <div id="operation-section" class="row_container">
+          <input type="button" id="get-files" value="open" class="clicks"></input>
+          <input type="button" id="get-obj" value="extract" class="clicks"></input>
+        </div>
+        <div id="operation-section" class="row_container">
+          <input type="button" id="export-csv" value="save CSV" class="clicks"></input>
+          <input type="button" id="export-geojson" value="save GeoJSON" class="clicks"></input>
+          <!-- <input type="button" id="op-test" value="test" class="clicks"></input> -->
+        </div>
       </div>
     </div>
 
@@ -83,6 +90,61 @@
       let file_extractions={}; // predictions from files
 
       function clear_all(){files_to_process=[];file_metas={};file_extractions={};}
+
+      function download_blob(blob, dfname='data.csv') {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.setAttribute("download", dfname);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+
+      function as_csv(){
+        const classes=ssd_mobilenet_v2_openimages_v4_classes;
+        let csv_head=["latitude",'longitude','datetime','filename'];
+        let csv_data=[];
+
+        let cls_c_name={};
+        for (let c of classes){
+          const cls = c.replaceAll(" ","_");
+          cls_c_name[c]=cls; // dict of cls names
+          csv_head.push(cls); // add cls name to csv head
+        }
+
+        let cls_name_idx={};
+        for (let i=0; i<csv_head.length;i++){
+          cls_name_idx[csv_head[i]]=i;
+        }
+
+        for (let fname in file_extractions){
+          const objs=file_extractions[fname];
+          const metas=file_metas[fname];
+          // only process those that contains GPS and timestamp
+          if (metas["latitude"]!=null && metas["longitude"]!=null && metas["datetime"]!=null) {
+            let csv_row=new Array(csv_head.length).fill(0); // each row
+            // set row meta data
+            for (let k of ['latitude','longitude','datetime']){
+              csv_row[cls_name_idx[k]]=metas[k];
+            }
+            csv_row[cls_name_idx['filename']]=fname;
+            // set row obj data
+            for (let obj of objs){ // fpr each obj of fname
+              for (let c of obj['alt_class_names']){ // for each alt class name
+                csv_row[cls_name_idx[cls_c_name[c]]]=(1 || csv_row[cls_name_idx[cls_c_name[c]]]) + 1;
+              }
+            }
+            csv_data.push(csv_row.map(e=>e.toString()));
+          }
+        }
+
+        let csv = csv_head.join(",") + "\n" + csv_data.map(e => e.join(",")).join("\n");
+        download_blob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }),'detection_output.csv');
+      }
+
+      function as_geojson(){
+
+      }
 
       const INPUT_IMG = document.getElementById("input");
       const INPUT_IMG_PREV = document.getElementById("input-preview");
@@ -189,6 +251,17 @@
         }
       }
 
+      function format_dt(dt){
+        try{
+          // EXIF uses YYYY:MM:DD HH:MM:SS datetime format
+          let [d,t] = dt.split(' ');
+          // use YYYY-MM-DDThh:mm:ss.s format for arcgis compatibility
+          return d.replaceAll(':','-')+'T'+t+'.0';
+        } catch {
+          return null;
+        }
+      }
+
       function cbk_get_GPS(f, cbk_next=null){
         // returns a callabel which extract gps data from f, and invoke cbk_next if non-null is given
         // note that EXIF works as callback functions
@@ -201,8 +274,8 @@
             const lon = EXIF.getTag(this, "GPSLongitude") || null;
             const bearing = EXIF.getTag(this, "GPSImgDirection") || EXIF.getTag(this, "GPSDestBearing") || null;
             const timestamp=EXIF.getTag(this, "DateTimeOriginal") || EXIF.getTag(this, "DateTimeDigitized") || null;
-            file_metas[f.name] = {'lat': to_decimal(latRef, lat), 'lon': to_decimal(lonRef, lon), 'heading': bearing, 'time': timestamp};
-            OUTPUT_INFO.value+=(' | GPS('+ to_decimal(latRef, lat) + ', ' + to_decimal(lonRef, lon) + ') | time ' + timestamp);
+            file_metas[f.name] = {'latitude': to_decimal(latRef, lat), 'longitude': to_decimal(lonRef, lon), 'heading': bearing, 'datetime': format_dt(timestamp)};
+            OUTPUT_INFO.value+=(' | GPS('+ to_decimal(latRef, lat) + ', ' + to_decimal(lonRef, lon) + ') | datetime ' + format_dt(timestamp));
             if (cbk_next!=null){
               cbk_next();
             }
@@ -364,12 +437,21 @@
             cbk_chain();
           } else {
             // alert("please select image files from your local drive first");
-            OUTPUT_INFO.value=('open first');
+            OUTPUT_INFO.value=('nothing to process, please open files');
           }
         };
 
-        document.getElementById('export-data').onclick=function(){
+        document.getElementById('export-csv').onclick=function(){
+          if (Object.keys(file_metas).length){
+            as_csv();
+          } else {
+            OUTPUT_INFO.value=('nothing to save, please open files and extract data');
+          }
+        };
+
+        document.getElementById('export-geojson').onclick=function(){
           console.log(file_extractions);
+          console.log(file_metas);
         };
       }
     </script>
