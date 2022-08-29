@@ -72,7 +72,7 @@
       <div id="operation-section" class="op_container row_container">
         <div id="operation-section" class="row_container">
           <input type="button" id="get-files" value="open" class="clicks"></input>
-          <input type="button" id="get-obj" value="extract" class="clicks"></input>
+          <input type="button" id="get-obj" value="detect" class="clicks"></input>
         </div>
         <div id="operation-section" class="row_container">
           <input type="button" id="export-csv" value="save CSV" class="clicks"></input>
@@ -100,7 +100,8 @@
         document.body.removeChild(a);
       }
 
-      function as_csv(){
+      function as_csv_old(){
+        // obe image per row
         const classes=ssd_mobilenet_v2_openimages_v4_classes;
         let csv_head=["latitude",'longitude','datetime','filename'];
         let csv_data=[];
@@ -142,8 +143,51 @@
         download_blob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }),'detection_output.csv');
       }
 
-      function as_geojson(){
+      function as_csv(){
+        // one object per row
+        const classes=ssd_mobilenet_v2_openimages_v4_classes;
+        let csv_head=["latitude",'longitude','datetime','filename','object_name','object_quantity'];
+        let csv_data=[];
 
+        let cls_name_idx={};
+        for (let i=0; i<csv_head.length;i++){
+          cls_name_idx[csv_head[i]]=i;
+        }
+
+        for (let fname in file_extractions){
+          const objs=file_extractions[fname];
+          const metas=file_metas[fname];
+          // only process those that contains GPS and timestamp
+          if (metas["latitude"]!=null && metas["longitude"]!=null && metas["datetime"]!=null) {
+            let obj_counts={};
+            // set row obj data
+            for (let obj of objs){ // fpr each obj of fname
+              for (let c of obj['alt_class_names']){ // for each alt class name
+                if (obj_counts[c]){
+                  obj_counts[c]+=1;
+                } else {
+                  obj_counts[c]=1;
+                }
+              }
+            }
+
+            for (let k in obj_counts){
+              let csv_row=new Array(csv_head.length).fill(0); // each row
+              // set row meta data
+              for (let k of ['latitude','longitude','datetime']){
+                csv_row[cls_name_idx[k]]=metas[k];
+              }
+              csv_row[cls_name_idx['object_name']]=k;
+              csv_row[cls_name_idx['object_quantity']]=obj_counts[k];
+
+              csv_row[cls_name_idx['filename']]=fname;
+              csv_data.push(csv_row.map(e=>e.toString()));
+            }
+          }
+        }
+
+        let csv = csv_head.join(",") + "\n" + csv_data.map(e => e.join(",")).join("\n");
+        download_blob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }),'detection_output.csv');
       }
 
       const INPUT_IMG = document.getElementById("input");
@@ -151,6 +195,7 @@
       const COUTPUT_CANVAS = document.getElementById('output');
       const OUTPUT_INFO = document.getElementById('output-info');
 
+      // for segmentations
       const INDEXED_COLORS={
         0:[0,0,0,255],
         1:[255,0,0,255],
@@ -450,8 +495,6 @@
         };
 
         document.getElementById('export-geojson').onclick=function(){
-          console.log(file_extractions);
-          console.log(file_metas);
         };
       }
     </script>
