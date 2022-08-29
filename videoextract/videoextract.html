@@ -177,7 +177,7 @@
               for (let k of ['latitude','longitude','datetime']){
                 csv_row[cls_name_idx[k]]=metas[k];
               }
-              csv_row[cls_name_idx['object_name']]=k;
+              csv_row[cls_name_idx['object_name']]=k.replaceAll(' ','_');
               csv_row[cls_name_idx['object_quantity']]=obj_counts[k];
 
               csv_row[cls_name_idx['filename']]=fname;
