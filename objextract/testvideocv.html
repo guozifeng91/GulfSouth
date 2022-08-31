@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Image Object Detection</title>
+    <!-- tensorflow -->
+    <script src="../lib/tfjs/tf.min.js"></script>
+    <!-- opencv -->
+    <script src="../lib/cvjs/opencv.js"></script>
+    <script type="text/javascript">
+      let tfmodel;
+    </script>
+    <style media="screen">
+      *{
+        font-family: sans-serif;
+      }
+      .header{
+        font-size:32px;
+        margin:1em;
+      }
+      .clicks{
+        font-size:18px;
+        min-width:10em;
+      }
+      .op_container{
+        gap:1em;
+        margin-top:2em;
+      }
+      .row_container{
+        width:100%;
+        display:flex;
+        flex-direction:row;
+        flex-wrap: wrap;
+        justify-content: space-between;
+      }
+      .img_container{
+        width:100%; display:flex; flex-direction:row; gap:1em;
+      }
+      .img_wrapper{
+        position:relative; width:100%;
+      }
+      .display-section{
+        position:relative;
+        text-align:center;
+        margin-left: auto;
+        margin-right: auto;
+        max-width: 720px;
+      }
+
+      textarea {
+        resize: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="display-section">
+      <div class="header">Object Detection using AI</div>
+      <!-- the real image data, for fixed input size -->
+      <img id="input" crossorigin="anonymous" src="" width="513px" height="513px" hidden="hidden">
+      <div id="image-section" class="img_container">
+        <!-- the preview image data -->
+        <div class="img_wrapper">
+        <canvas id="input-preview" width="513px" height="513px" style="max-width:100%; border: solid 1px black;"></canvas>
+        </div>
+        <div class="img_wrapper">
+        <canvas id="output" width="513px" height="513px" style="max-width:100%; border: solid 1px black;"></canvas>
+        </div>
+      </div>
+      <textarea id="output-info" readonly="readonly" style="width:99%; padding:0.5%; height:20vh" ></textarea>
+      <input type="file" accept="video/*" id="input-file" multiple="multiple" hidden="hidden"></input>
+      <div id="operation-section" class="op_container row_container">
+        <div id="operation-section" class="row_container">
+          <input type="button" id="get-files" value="open" class="clicks"></input>
+          <input type="button" id="get-obj" value="detect" class="clicks"></input>
+        </div>
+        <div id="operation-section" class="row_container">
+          <input type="button" id="export-csv" value="save CSV" class="clicks"></input>
+          <input type="button" id="export-geojson" value="save GeoJSON" class="clicks"></input>
+          <!-- <input type="button" id="op-test" value="test" class="clicks"></input> -->
+        </div>
+      </div>
+    </div>
+
+    <!-- reading exif inf. from files (GPS coordinate) -->
+    <script type="text/javascript" src="../lib/exif-js/exif.js"></script>
+    <script type="text/javascript">
+      // using exif-js to obtain EXIF data from jpg images
+      function to_decimal(ref, num){
+        let sign=1;
+        if (ref!=null){
+          // direction info is given
+          if (ref=='S' || ref=='s' || ref=='W' || ref=='w'){
+            sign=-1;
+          }
+        }
+
+        if (num!=null){
+          // has numerical data
+          if (num.length==3){
+            // degree, minute, second
+            return sign * (num[0]+num[1]/60+num[2]/3600);
+          } else {
+            // degree in floating num
+            return sign * num;
+          }
+        } else {
+          // no numerical data
+          return null;
+        }
+      }
+
+      function format_dt(dt){
+        try{
+          // EXIF uses YYYY:MM:DD HH:MM:SS datetime format
+          let [d,t] = dt.split(' ');
+          // use YYYY-MM-DDThh:mm:ss.s format for arcgis compatibility
+          return d.replaceAll(':','-')+'T'+t+'.0';
+        } catch {
+          return null;
+        }
+      }
+
+      function cbk_get_GPS(f, cbk_next=null){
+        // returns a callabel which extract gps data from f, and invoke cbk_next if non-null is given
+        // note that EXIF works as callback functions
+        return function(){
+          EXIF.getData(f, function(){
+            // console.log(EXIF.pretty(this));
+            const latRef = EXIF.getTag(this, "GPSLatitudeRef") || null;
+            const lat = EXIF.getTag(this, "GPSLatitude") || null;
+            const lonRef = EXIF.getTag(this, "GPSLongitudeRef") || null;
+            const lon = EXIF.getTag(this, "GPSLongitude") || null;
+            const bearing = EXIF.getTag(this, "GPSImgDirection") || EXIF.getTag(this, "GPSDestBearing") || null;
+            const timestamp=EXIF.getTag(this, "DateTimeOriginal") || EXIF.getTag(this, "DateTimeDigitized") || null;
+            file_metas[f.name] = {'latitude': to_decimal(latRef, lat), 'longitude': to_decimal(lonRef, lon), 'heading': bearing, 'datetime': format_dt(timestamp)};
+            OUTPUT_INFO.value+=(' | GPS('+ to_decimal(latRef, lat) + ', ' + to_decimal(lonRef, lon) + ') | datetime ' + format_dt(timestamp));
+            if (cbk_next!=null){
+              cbk_next();
+            }
+          });
+        };
+      }
+    </script>
+
+    <script type="text/javascript">
+      // obtaining GPS info from MOV (Apple) movie files
+      // this doc is not finished
+      // too much work, not worth it
+      const debug=true;
+
+      const ATOM_HEADER_SIZE=8;
+      const EPOCH_ADJUSTER = 2082844800;
+
+      function read_bytes_as_string(buffer, start, length) {
+          var outstr = "";
+          for (var n = start; n < start+length; n++) {
+              outstr += String.fromCharCode(buffer.getUint8(n));
+          }
+          return outstr;
+      }
+
+      function read_QuickTime_atom_header(f, offset){
+        // see "Atom" in https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/Metadata/Metadata.html
+        const atom_size = f.getUint32(offset);
+        const atom_type = read_bytes_as_string(f, offset + 4, 4);
+        return [atom_type, atom_size, atom_size-ATOM_HEADER_SIZE];
+      }
+
+      function read_Apple_MOV_atom_keys(f, offset, exp_size){
+        let keys=[];
+        let i_key = 0;
+
+        // version (1 byte) + flag (3 byte) + size (4 bytes)
+        // see "Metadata Item Keys Atom"
+        // in https://developer.apple.com/library/archive/documentation/QuickTime/QTFF/Metadata/Metadata.html
+        const num_keys = f.getUint32(offset+4);
+        offset+=8;
+
+        while (i_key < num_keys){
+          const [atom_type, atom_size, body_size] = read_QuickTime_atom_header(f, offset);
+          if (debug) console.log(atom_type); // should be "mdta"
+          const atom_data = read_bytes_as_string(f, offset+8, body_size);
+          offset += atom_size;
+          keys.push(atom_data);
+          i_key+=1;
+        }
+
+        if (offset==exp_size){
+          if (debug) console.log('assert check pass');
+        } else {
+          if (debug) console.log('assert check failed');
+        }
+
+        return keys;
+      }
+
+      function read_MOV_atom_items(f, offset, exp_size){
+        let items=[];
+
+        while(offset<exp_size){
+          const index = f.getUint32(offset+4);  //get key index
+          offset += 8;
+          const [atom_type, atom_size, body_size]=read_QuickTime_atom_header(f, offset);
+
+          if (atom_type=='data'){
+            // dtype and loc specifications take 8 bytes, header takes 8 bytes
+            const atom_data = read_bytes_as_string(f, offset + 16, body_size - 8);
+            items.push([index, data]);
+          }
+          offset += atom_size;
+        }
+
+        return items;
+      }
+
+      function find_EXIF_Apple_MOV(file){
+        var dataView = new DataView(file);
+
+        const atom_hier=['moov','meta'];
+        let cur_hier=0;
+
+        let offset=0;
+        let length=file.byteLength;
+
+        let keys=[];
+        let items=[];
+        while (offset<length) {
+          // read an atom
+          let [atom_type, atom_size, body_size]=read_QuickTime_atom_header(f, offset);
+          if (cur_hier < atom_hier.length){
+            // not yet reach the last level
+            if (atom_type == atom_hier[cur_hier]){
+              // found, move to next level
+              cur_hier+=1;
+              // narrow down the search area to prevent visiting the entire video file
+              length=offset+atom_size;
+            } else {
+              // move to the end of current item
+              offset+=atom_size;
+            }
+          } else {
+            // reached the last level
+            if (atom_type == 'keys'){
+              // find keys
+              keys = read_Apple_MOV_atom_keys(f, offset, body_size);
+            } else if (atom_type == 'ilst'){
+              items = read_MOV_atom_items(f, offset, body_size);
+            }
+            offset+=atom_size;
+          }
+        }
+
+        let meta={};
+        for (let it of items){
+          meta[keys[it[0]]]=it[1];
+        }
+        return meta;
+      }
+
+      function handle_bin_file(binfile){
+        meta = find_EXIF_Apple_MOV(binfile);
+        console.log(meta);
+      }
+
+      function get_video_meta(blob){
+        var fileReader = new FileReader();
+        fileReader.onload = function(e) {
+            handleBinaryFile(e.target.result);
+        };
+        fileReader.readAsArrayBuffer(blob);
+      }
+
+    </script>
+
+    <script type="text/javascript">
+
+      let files_to_process=[];
+      let file_metas={}; // meta data from files
+      let file_extractions={}; // predictions from files
+
+      function clear_all(){files_to_process=[];file_metas={};file_extractions={};}
+
+      const INPUT_IMG = document.getElementById("input");
+      const INPUT_IMG_PREV = document.getElementById("input-preview");
+      const COUTPUT_CANVAS = document.getElementById('output');
+      const OUTPUT_INFO = document.getElementById('output-info');
+
+      function cbk_load_img(f, cbk_next=null){
+        // returns a callabel which reads image data from f, and invoke cbk_next if non-null is given
+        return function(){
+          // OUTPUT_INFO.value+=('\nprocessing '+f.name + ' ...');
+          OUTPUT_INFO.value+=('\n'+f.name);
+
+          // OUTPUT_INFO.scrollTop = OUTPUT_INFO.scrollHeight;
+          // const url= URL.createObjectURL(f);
+          // INPUT_IMG.src = url;
+          // // INPUT_IMG_PREV.src=url;
+          //
+          // INPUT_IMG.onload = function(){
+          //   URL.revokeObjectURL(this.src);
+          //   if (cbk_next!=null){
+          //     cbk_next();
+          //   }
+          // };
+
+
+          if (cbk_next!=null){
+            cbk_next();
+          }
+        };
+      }
+
+      function reg_ops(seg=false){
+        // file API, which reads images (and more) from local drive
+        // see https://developer.mozilla.org/en-US/docs/Web/API/File_API/Using_files_from_web_applications
+        document.getElementById("get-files").addEventListener("click", function(){document.getElementById("input-file").click();}, false);
+
+        document.getElementById("input-file").addEventListener("change", function(){
+          clear_all();
+          files_to_process=this.files;
+          OUTPUT_INFO.value="==== " + this.files.length + " image(s) to process ====";
+        }, false);
+
+        document.getElementById('get-obj').onclick=function(){
+          // build a chain of callback functions such that the files will be processed one after the other
+          let cbk_chain=function(){
+            OUTPUT_INFO.value+=('\n==== finished ====');
+            OUTPUT_INFO.scrollTop = OUTPUT_INFO.scrollHeight;
+          };
+
+          if (files_to_process.length){
+            // generate the callback chain from the selected files
+            for (let file of files_to_process){ // for each of the returned files
+              cbk_chain = cbk_get_GPS(file, cbk_chain);
+
+              cbk_chain = cbk_load_img(file, cbk_chain);
+            }
+            cbk_chain();
+          } else {
+            // alert("please select image files from your local drive first");
+            OUTPUT_INFO.value=('nothing to process, please open files');
+          }
+        };
+
+        document.getElementById('export-csv').onclick=function(){
+          if (Object.keys(file_metas).length){
+            as_csv();
+          } else {
+            OUTPUT_INFO.value=('nothing to save, please open files and extract data');
+          }
+        };
+
+        document.getElementById('export-geojson').onclick=function(){
+        };
+      }
+    </script>
+
+    <script type="text/javascript" src="https://storage.googleapis.com/zfguo_pretrained_models/ssd_mobilenet_v2_openimages_v4/classes.js"></script>
+    <script type="module">
+
+      function init_localization(){
+        reg_ops();
+        OUTPUT_INFO.value=('ready');
+      }
+
+      init_localization();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Image Object Detection</title>
+    <!-- tensorflow -->
+    <!-- <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0/dist/tf.min.js"></script> -->
+    <script src="../lib/tfjs/tf.min.js"></script>
+    <script type="text/javascript">
+      let tfmodel;
+    </script>
+    <style media="screen">
+      *{
+        font-family: sans-serif;
+      }
+      .header{
+        font-size:32px;
+        margin:1em;
+      }
+      .clicks{
+        font-size:18px;
+        min-width:10em;
+      }
+      .op_container{
+        gap:1em;
+        margin-top:2em;
+      }
+      .row_container{
+        width:100%;
+        display:flex;
+        flex-direction:row;
+        flex-wrap: wrap;
+        justify-content: space-between;
+      }
+      .img_container{
+        width:100%; display:flex; flex-direction:row; gap:1em;
+      }
+      .img_wrapper{
+        position:relative; width:100%;
+      }
+      .display-section{
+        position:relative;
+        text-align:center;
+        margin-left: auto;
+        margin-right: auto;
+        max-width: 720px;
+      }
+
+      textarea {
+        resize: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="display-section">
+      <div class="header">Object Detection using AI</div>
+      <!-- the real image data, for fixed input size -->
+      <img id="input" crossorigin="anonymous" src="" width="513px" height="513px" hidden="hidden">
+      <div id="image-section" class="img_container">
+        <!-- the preview image data -->
+        <div class="img_wrapper">
+        <canvas id="input-preview" width="513px" height="513px" style="max-width:100%; border: solid 1px black;"></canvas>
+        </div>
+        <div class="img_wrapper">
+        <canvas id="output" width="513px" height="513px" style="max-width:100%; border: solid 1px black;"></canvas>
+        </div>
+      </div>
+      <textarea id="output-info" readonly="readonly" style="width:99%; padding:0.5%; height:20vh" ></textarea>
+      <input type="file" accept="image/jpeg video/quicktime" id="input-file" multiple="multiple" hidden="hidden"></input>
+      <div id="operation-section" class="op_container row_container">
+        <div id="operation-section" class="row_container">
+          <input type="button" id="get-files" value="open" class="clicks"></input>
+          <input type="button" id="get-obj" value="detect" class="clicks"></input>
+        </div>
+        <div id="operation-section" class="row_container">
+          <input type="button" id="export-csv" value="save CSV" class="clicks"></input>
+          <input type="button" id="export-geojson" value="save GeoJSON" class="clicks"></input>
+          <!-- <input type="button" id="op-test" value="test" class="clicks"></input> -->
+        </div>
+      </div>
+    </div>
+
+    <!-- reading exif inf. from files (GPS coordinate) -->
+    <script type="text/javascript" src="../lib/exif-js/exif.js"></script>
+    <script type="text/javascript">
+      let videos_to_process=[];
+      let files_to_process=[];
+      let file_metas={}; // meta data from files
+      let file_extractions={}; // predictions from files
+
+      function clear_all(){files_to_process=[];file_metas={};file_extractions={};}
+
+      function download_blob(blob, dfname='data.csv') {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.setAttribute("download", dfname);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+
+      function as_csv_old(){
+        // obe image per row
+        const classes=ssd_mobilenet_v2_openimages_v4_classes;
+        let csv_head=["latitude",'longitude','datetime','filename'];
+        let csv_data=[];
+
+        let cls_c_name={};
+        for (let c of classes){
+          const cls = c.replaceAll(" ","_");
+          cls_c_name[c]=cls; // dict of cls names
+          csv_head.push(cls); // add cls name to csv head
+        }
+
+        let cls_name_idx={};
+        for (let i=0; i<csv_head.length;i++){
+          cls_name_idx[csv_head[i]]=i;
+        }
+
+        for (let fname in file_extractions){
+          const objs=file_extractions[fname];
+          const metas=file_metas[fname];
+          // only process those that contains GPS and timestamp
+          if (metas["latitude"]!=null && metas["longitude"]!=null && metas["datetime"]!=null) {
+            let csv_row=new Array(csv_head.length).fill(0); // each row
+            // set row meta data
+            for (let k of ['latitude','longitude','datetime']){
+              csv_row[cls_name_idx[k]]=metas[k];
+            }
+            csv_row[cls_name_idx['filename']]=fname;
+            // set row obj data
+            for (let obj of objs){ // fpr each obj of fname
+              for (let c of obj['alt_class_names']){ // for each alt class name
+                csv_row[cls_name_idx[cls_c_name[c]]]=(1 || csv_row[cls_name_idx[cls_c_name[c]]]) + 1;
+              }
+            }
+            csv_data.push(csv_row.map(e=>e.toString()));
+          }
+        }
+
+        let csv = csv_head.join(",") + "\n" + csv_data.map(e => e.join(",")).join("\n");
+        download_blob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }),'detection_output.csv');
+      }
+
+      function as_csv(){
+        // one object per row
+        const classes=ssd_mobilenet_v2_openimages_v4_classes;
+        let csv_head=["latitude",'longitude','datetime','filename','object_name','object_quantity'];
+        let csv_data=[];
+
+        let cls_name_idx={};
+        for (let i=0; i<csv_head.length;i++){
+          cls_name_idx[csv_head[i]]=i;
+        }
+
+        for (let fname in file_extractions){
+          const objs=file_extractions[fname];
+          const metas=file_metas[fname];
+          // only process those that contains GPS and timestamp
+          if (metas["latitude"]!=null && metas["longitude"]!=null && metas["datetime"]!=null) {
+            let obj_counts={};
+            // set row obj data
+            for (let obj of objs){ // fpr each obj of fname
+              for (let c of obj['alt_class_names']){ // for each alt class name
+                if (obj_counts[c]){
+                  obj_counts[c]+=1;
+                } else {
+                  obj_counts[c]=1;
+                }
+              }
+            }
+
+            for (let k in obj_counts){
+              let csv_row=new Array(csv_head.length).fill(0); // each row
+              // set row meta data
+              for (let k of ['latitude','longitude','datetime']){
+                csv_row[cls_name_idx[k]]=metas[k];
+              }
+              csv_row[cls_name_idx['object_name']]=k.replaceAll(' ','_');
+              csv_row[cls_name_idx['object_quantity']]=obj_counts[k];
+
+              csv_row[cls_name_idx['filename']]=fname;
+              csv_data.push(csv_row.map(e=>e.toString()));
+            }
+          }
+        }
+
+        let csv = csv_head.join(",") + "\n" + csv_data.map(e => e.join(",")).join("\n");
+        download_blob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }),'detection_output.csv');
+      }
+
+      const INPUT_IMG = document.getElementById("input");
+      const INPUT_IMG_PREV = document.getElementById("input-preview");
+      const COUTPUT_CANVAS = document.getElementById('output');
+      const OUTPUT_INFO = document.getElementById('output-info');
+
+      // for segmentations
+      const INDEXED_COLORS={
+        0:[0,0,0,255],
+        1:[255,0,0,255],
+        2:[255,255,0,255],
+        3:[255,255,255,255],
+        4:[0,255,0,255],
+        5:[0,255,255,255],
+        6:[0,0,255,255],
+        7:[255,0,255,255],
+      };
+
+      function render_raster(ctx, rst, h=513, w=513, cmap=(x)=>{return INDEXED_COLORS[x%8];}){
+        // render raster data to RGB
+        let imgData = ctx.getImageData(0, 0, w, h);
+        for (let i=0; i<h; i++){ // y
+          for (let j=0; j<w; j++){ // x
+            const index_rst = (i*w + j);
+            const index_px = index_rst * 4;
+            const px = cmap(rst[index_rst]);
+            imgData.data[index_px]=px[0];
+            imgData.data[index_px+1]=px[1];
+            imgData.data[index_px+2]=px[2];
+            imgData.data[index_px+3]=px[3];
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+      }
+
+      function render_localization(ctx, info=[], h=513, w=513) {
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        ctx.drawImage(INPUT_IMG, 0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        for (let l of info){
+          const bbox=l['bbox'];
+          ctx.moveTo(bbox[1]*w, bbox[0]*h);
+          ctx.lineTo(bbox[1]*w, bbox[2]*h);
+          ctx.lineTo(bbox[3]*w, bbox[2]*h);
+          ctx.lineTo(bbox[3]*w, bbox[0]*h);
+          ctx.lineTo(bbox[1]*w, bbox[0]*h);
+        }
+        ctx.strokeStyle = "white";
+        ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,0.3)";
+        ctx.fill();
+
+        ctx.fillStyle = "white";
+        ctx.font = "18px sans-serif";
+        for (let l of info){
+          const bbox=l['bbox'];
+          ctx.fillText(l['alt_class_names'].join(', '), bbox[1]*w, bbox[0]*h+18);
+        }
+      }
+
+      function iou(bbox1,bbox2){
+        function area(a,b,c,d){
+          return (c-a)*(d-b);
+        }
+        const [a1,b1,c1,d1]=bbox1;
+        const [a2,b2,c2,d2]=bbox2;
+
+        const xmin=Math.max(a1,a2);
+        const ymin=Math.max(b1,b2);
+
+        const xmax=Math.min(c1,c2);
+        const ymax=Math.min(d1,d2);
+
+        if (xmin>=xmax || ymin>=ymax){
+          return 0;
+        } else {
+          const i = area(xmin,ymin,xmax,ymax);
+          return i / (area(a1,b1,c1,d1) + area(a2,b2,c2,d2) - i);
+        }
+      }
+
+      function to_decimal(ref, num){
+        let sign=1;
+        if (ref!=null){
+          // direction info is given
+          if (ref=='S' || ref=='s' || ref=='W' || ref=='w'){
+            sign=-1;
+          }
+        }
+
+        if (num!=null){
+          // has numerical data
+          if (num.length==3){
+            // degree, minute, second
+            return sign * (num[0]+num[1]/60+num[2]/3600);
+          } else {
+            // degree in floating num
+            return sign * num;
+          }
+        } else {
+          // no numerical data
+          return null;
+        }
+      }
+
+      function format_dt(dt){
+        try{
+          // EXIF uses YYYY:MM:DD HH:MM:SS datetime format
+          let [d,t] = dt.split(' ');
+          // use YYYY-MM-DDThh:mm:ss.s format for arcgis compatibility
+          return d.replaceAll(':','-')+'T'+t+'.0';
+        } catch {
+          return null;
+        }
+      }
+
+      function cbk_get_GPS(f, cbk_next=null){
+        // returns a callabel which extract gps data from f, and invoke cbk_next if non-null is given
+        // note that EXIF works as callback functions
+        return function(){
+          EXIF.getData(f, function(){
+            // console.log(EXIF.pretty(this));
+            const latRef = EXIF.getTag(this, "GPSLatitudeRef") || null;
+            const lat = EXIF.getTag(this, "GPSLatitude") || null;
+            const lonRef = EXIF.getTag(this, "GPSLongitudeRef") || null;
+            const lon = EXIF.getTag(this, "GPSLongitude") || null;
+            const bearing = EXIF.getTag(this, "GPSImgDirection") || EXIF.getTag(this, "GPSDestBearing") || null;
+            const timestamp=EXIF.getTag(this, "DateTimeOriginal") || EXIF.getTag(this, "DateTimeDigitized") || null;
+            file_metas[f.name] = {'latitude': to_decimal(latRef, lat), 'longitude': to_decimal(lonRef, lon), 'heading': bearing, 'datetime': format_dt(timestamp)};
+            OUTPUT_INFO.value+=(' | GPS('+ to_decimal(latRef, lat) + ', ' + to_decimal(lonRef, lon) + ') | datetime ' + format_dt(timestamp));
+            if (cbk_next!=null){
+              cbk_next();
+            }
+          });
+        };
+      }
+
+      function cbk_load_img(f, cbk_next=null){
+        // returns a callabel which reads image data from f, and invoke cbk_next if non-null is given
+        return function(){
+          // OUTPUT_INFO.value+=('\nprocessing '+f.name + ' ...');
+          OUTPUT_INFO.value+=('\n'+f.name);
+          OUTPUT_INFO.scrollTop = OUTPUT_INFO.scrollHeight;
+          const url= URL.createObjectURL(f);
+          INPUT_IMG.src = url;
+          // INPUT_IMG_PREV.src=url;
+
+          INPUT_IMG.onload = function(){
+            URL.revokeObjectURL(this.src);
+            if (cbk_next!=null){
+              cbk_next();
+            }
+          };
+        };
+      }
+
+      function cbk_run_prediction_segmentation(f, model, cbk_next=null){
+        // returns a callabel which process the current data of <img>, and invoke cbk_next if non-null is given
+        return function(){
+          const img = INPUT_IMG;
+          const x = tf.tidy(()=>{
+            // return tf.image.resizeBilinear(tf.browser.fromPixels(img),[513,513]).cast('int32').expandDims(0); // discarded due to memory leak
+
+            // important: input image (html element) must have the same size, otherwise there will be memory leak
+            // it seems the tf will create a new graph once the input shape changes
+            return tf.browser.fromPixels(img).cast('int32').expandDims(0);
+          });
+
+          const y = tf.tidy(()=>{
+            return model.execute(x).squeeze().argMax(2);
+          });
+
+          // render the input output
+          INPUT_IMG_PREV.getContext('2d').drawImage(INPUT_IMG, 0, 0, INPUT_IMG_PREV.width, INPUT_IMG_PREV.height);
+          render_raster(COUTPUT_CANVAS.getContext('2d'), y.dataSync());
+
+          x.dispose();
+          y.dispose();
+
+          if (cbk_next!=null){
+            cbk_next();
+          }
+        };
+      }
+
+      function cbk_run_prediction_localization(f, model, score_thres=0.2, cbk_next=null){
+        // returns a callabel which process the current data of <img>, and invoke cbk_next if non-null is given
+        return function(){
+          const img = INPUT_IMG;
+          const x = tf.tidy(()=>{
+            // important: input image (html element) must have the same size, otherwise there will be memory leak
+            // it seems the tf will create a new graph once the input shape changes
+            return tf.browser.fromPixels(img).cast("float32").mul(1.0/255.0).expandDims(0);
+          });
+
+          // module_apply_default/hub_input/strided_slice: box
+          // module_apply_default/hub_input/strided_slice_1: score
+          // module_apply_default/hub_input/strided_slice_2: class
+          // module_apply_default/hub_input/index_to_string_Lookup is not working
+          // there are two input placeholder, is it a bug when converting from saved_model?
+          model.executeAsync([x,x], ['module_apply_default/hub_input/strided_slice', 'module_apply_default/hub_input/strided_slice_1', 'module_apply_default/hub_input/strided_slice_2']).then(function(y){
+            const classes=ssd_mobilenet_v2_openimages_v4_classes; // loaded from JS element
+            let bbox = y[0].dataSync();
+            let scores = y[1].dataSync();
+            let type = y[2].dataSync();
+
+            let locs=[];
+
+            for (let i=0;i<scores.length;i++){
+              if (scores[i]>score_thres){
+                locs.push({'class_name':classes[type[i]-1],'alt_class_names':[classes[type[i]-1]], 'score':scores[i], 'bbox':bbox.slice(i*4,(i+1)*4)});
+              }
+            }
+
+            let chk=new Array(locs.length).fill(true);
+            // remove overlapped bboxes
+            for (let i=0;i<locs.length;i++){
+              for (let j=i+1;j<locs.length;j++){
+                if (iou(locs[i]['bbox'], locs[j]['bbox'])>=0.5) {
+                  if (locs[i]['score'] >= locs[j]['score']) {
+                    chk[j]=false;
+                    locs[i]['alt_class_names'] = locs[i]['alt_class_names'].concat(locs[j]['alt_class_names']); // merge their alt names (i.e., other possible class names)
+                  } else {
+                    chk[i]=false;
+                    locs[j]['alt_class_names'] = locs[j]['alt_class_names'].concat(locs[i]['alt_class_names']); // merge their alt names (i.e., other possible class names)
+                  }
+                }
+              }
+            }
+
+            let localizations=[];
+            for (let i=0;i<locs.length;i++){
+              if (chk[i]){
+                locs[i]['alt_class_names'] = [...new Set(locs[i]['alt_class_names'])]; // remove duplicates
+                localizations.push(locs[i]);
+              }
+            }
+            // render the data
+            OUTPUT_INFO.value+=(' | ' + localizations.length + ' object(s)');
+            file_extractions[f.name]=localizations;
+            INPUT_IMG_PREV.getContext('2d').drawImage(INPUT_IMG, 0, 0, INPUT_IMG_PREV.width, INPUT_IMG_PREV.height);
+            render_localization(COUTPUT_CANVAS.getContext('2d'), localizations);
+
+            x.dispose();
+            y[0].dispose();
+            y[1].dispose();
+            y[2].dispose();
+
+            if (cbk_next!=null){
+              cbk_next();
+            }
+          });
+        };
+      }
+
+      function reg_ops(seg=false){
+        // file API, which reads images (and more) from local drive
+        // see https://developer.mozilla.org/en-US/docs/Web/API/File_API/Using_files_from_web_applications
+        document.getElementById("get-files").addEventListener("click", function(){document.getElementById("input-file").click();}, false);
+
+        document.getElementById("input-file").addEventListener("change", function(){
+          clear_all();
+          files_to_process=this.files;
+          OUTPUT_INFO.value="==== " + this.files.length + " image(s) to process ====";
+        }, false);
+
+        document.getElementById('get-obj').onclick=function(){
+          // build a chain of callback functions such that the files will be processed one after the other
+          let cbk_chain=function(){
+            OUTPUT_INFO.value+=('\n==== finished ====');
+            OUTPUT_INFO.scrollTop = OUTPUT_INFO.scrollHeight;
+          };
+
+          if (files_to_process.length){
+            // generate the callback chain from the selected files
+            for (let file of files_to_process){ // for each of the returned files
+              cbk_chain = cbk_get_GPS(file, cbk_chain);
+
+              if (seg) {
+                // fire the segmentation model (require segmentation model)
+                cbk_chain = cbk_run_prediction_segmentation(file, tfmodel, cbk_chain);
+              } else {
+                // fire the localization model (require localization model)
+                cbk_chain = cbk_run_prediction_localization(file, tfmodel, 0.18, cbk_chain);
+              }
+
+              cbk_chain = cbk_load_img(file, cbk_chain);
+            }
+            cbk_chain();
+          } else {
+            // alert("please select image files from your local drive first");
+            OUTPUT_INFO.value=('nothing to process, please open files');
+          }
+        };
+
+        document.getElementById('export-csv').onclick=function(){
+          if (Object.keys(file_metas).length){
+            as_csv();
+          } else {
+            OUTPUT_INFO.value=('nothing to save, please open files and extract data');
+          }
+        };
+
+        document.getElementById('export-geojson').onclick=function(){
+        };
+      }
+    </script>
+
+    <script type="text/javascript" src="https://storage.googleapis.com/zfguo_pretrained_models/ssd_mobilenet_v2_openimages_v4/classes.js"></script>
+    <script type="module">
+      function init_segmentation(){
+        OUTPUT_INFO.value=('loading AI model (8MB)...');
+        tf.loadGraphModel("../models/deeplabv3_mnv2_dm05_pascal_trainval/web/model.json").then((x)=>{
+          tfmodel=x;
+          reg_ops(true);
+          OUTPUT_INFO.value=('ready');
+        });
+      }
+
+
+      function init_localization(){
+        OUTPUT_INFO.value=('loading AI model (63MB)...');
+        tf.loadGraphModel("https://storage.googleapis.com/zfguo_pretrained_models/ssd_mobilenet_v2_openimages_v4/model.json").then((model)=>{
+          tfmodel=model;
+          reg_ops();
+          OUTPUT_INFO.value=('ready');
+        });
+      }
+
+      init_localization();
+    </script>
+  </body>
+</html>
