@@ -69,11 +69,24 @@
       <textarea id="output-info" readonly="readonly" style="width:99%; padding:0.5%; height:20vh" ></textarea>
       <input type="file" accept="image/jpeg" id="input-file" multiple="multiple" hidden="hidden"></input>
       <div id="operation-section" class="op_container row_container">
-        <div id="operation-section" class="row_container">
+
+        <div class="row_container">
+          <div>
+            <input type="range" id="thres1" name="sensitivity" min="0.05" max="0.25" step="0.01" value="0.15" style="width:10em" onchange="thres1();" oninput="thres1();">
+              <label id="thres1-lb" for="threshold" style="display:inline-block; width:12em; text-align:left">val</label>
+            </input>
+          </div>
+
+          <div>
+            <input type="range" id="thres2" name="merge overlaps" min="0.3" max="0.8" step="0.1" value="0.5" style="width:10em" onchange="thres2();" oninput="thres2();">
+              <label id="thres2-lb" for="threshold" style="display:inline-block; width:12em; text-align:left">val</label>
+            </input>
+          </div>
+        </div>
+
+        <div class="row_container">
           <input type="button" id="get-files" value="open" class="clicks"></input>
           <input type="button" id="get-obj" value="detect" class="clicks"></input>
-        </div>
-        <div id="operation-section" class="row_container">
           <input type="button" id="export-csv" value="save CSV" class="clicks"></input>
           <input type="button" id="export-geojson" value="save GeoJSON" class="clicks" hidden="hidden"></input>
           <!-- <input type="button" id="op-test" value="test" class="clicks"></input> -->
@@ -89,7 +102,27 @@
       let file_metas={}; // meta data from files
       let file_extractions={}; // predictions from files
 
+      let SCORE_THRES=0.2;
+      let THRES_IOU=0.5;
       function clear_all(){files_to_process=[];file_metas={};file_extractions={};}
+
+      function thres1(){
+        let thres1 = document.getElementById("thres1");
+        let thres1_lb = document.getElementById("thres1-lb");
+        thres1_lb.innerText=thres1.name + ": " + thres1.value;
+        SCORE_THRES=parseFloat(thres1.value);
+      }
+
+      thres1();
+
+      function thres2(){
+        let thres2 = document.getElementById("thres2");
+        let thres2_lb = document.getElementById("thres2-lb");
+        thres2_lb.innerText=thres2.name + ": " + thres2.value;
+        THRES_IOU=parseFloat(thres2.value);
+      }
+
+      thres2();
 
       function download_blob(blob, dfname='data.csv') {
         const a = document.createElement("a");
@@ -378,6 +411,7 @@
 
       function cbk_run_prediction_localization(f, model, score_thres=0.2, cbk_next=null){
         // returns a callabel which process the current data of <img>, and invoke cbk_next if non-null is given
+        // score_thres has now been replaced by a global variable which is adjustable via a slider
         return function(){
           const img = INPUT_IMG;
           const x = tf.tidy(()=>{
@@ -400,7 +434,7 @@
             let locs=[];
 
             for (let i=0;i<scores.length;i++){
-              if (scores[i]>score_thres){
+              if (scores[i]>SCORE_THRES){
                 locs.push({'class_name':classes[type[i]-1],'alt_class_names':[classes[type[i]-1]], 'score':scores[i], 'bbox':bbox.slice(i*4,(i+1)*4)});
               }
             }
@@ -409,7 +443,7 @@
             // remove overlapped bboxes
             for (let i=0;i<locs.length;i++){
               for (let j=i+1;j<locs.length;j++){
-                if (iou(locs[i]['bbox'], locs[j]['bbox'])>=0.5) {
+                if (iou(locs[i]['bbox'], locs[j]['bbox'])>=THRES_IOU) {
                   if (locs[i]['score'] >= locs[j]['score']) {
                     chk[j]=false;
                     locs[i]['alt_class_names'] = locs[i]['alt_class_names'].concat(locs[j]['alt_class_names']); // merge their alt names (i.e., other possible class names)
