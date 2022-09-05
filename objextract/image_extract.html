@@ -72,13 +72,15 @@
 
         <div class="row_container">
           <div>
-            <input type="range" id="thres1" name="sensitivity" min="0.05" max="0.25" step="0.01" value="0.15" style="width:10em" onchange="thres1();" oninput="thres1();">
+            <!-- map [1,0] to [0.05, 0.25], default 0.5 gives 0.15 -->
+            <input type="range" id="thres1" name="sensitivity" min="0" max="1" step="0.1" value="0.5" style="width:10em" onchange="thres1();" oninput="thres1();">
               <label id="thres1-lb" for="threshold" style="display:inline-block; width:12em; text-align:left">val</label>
             </input>
           </div>
 
           <div>
-            <input type="range" id="thres2" name="merge overlaps" min="0.3" max="0.8" step="0.1" value="0.5" style="width:10em" onchange="thres2();" oninput="thres2();">
+            <!-- map [0, 1] to [0.3, 0.8], default 0.5 gives 0.55-->
+            <input type="range" id="thres2" name="quantity" min="0" max="1" step="0.1" value="0.5" style="width:10em" onchange="thres2();" oninput="thres2();">
               <label id="thres2-lb" for="threshold" style="display:inline-block; width:12em; text-align:left">val</label>
             </input>
           </div>
@@ -110,7 +112,7 @@
         let thres1 = document.getElementById("thres1");
         let thres1_lb = document.getElementById("thres1-lb");
         thres1_lb.innerText=thres1.name + ": " + thres1.value;
-        SCORE_THRES=parseFloat(thres1.value);
+        SCORE_THRES=(1 - parseFloat(thres1.value))*0.2 + 0.05; // map [1, 0] to [0.05, 0.25]
       }
 
       thres1();
@@ -119,7 +121,7 @@
         let thres2 = document.getElementById("thres2");
         let thres2_lb = document.getElementById("thres2-lb");
         thres2_lb.innerText=thres2.name + ": " + thres2.value;
-        THRES_IOU=parseFloat(thres2.value);
+        THRES_IOU=parseFloat(thres2.value) * 0.5 + 0.3; // map [0, 1] to [0.3, 0.8]
       }
 
       thres2();
